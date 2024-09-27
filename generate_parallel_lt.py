@@ -1,3 +1,4 @@
+import json
 import cv2
 import numpy as np
 import os
@@ -93,7 +94,7 @@ def detect_objects(detector, frame, frame_idx, video_len, score_thr=0.3):
                                 frame_id=frame_idx,
                                 video_len=video_len,
                                 test_pipeline=masa_test_pipeline,
-                                text_prompt="object",
+                                text_prompt="vehicle",
                                 detector_type='mmdet')
         if isinstance(result, tuple):
             result = result[0]
@@ -101,7 +102,7 @@ def detect_objects(detector, frame, frame_idx, video_len, score_thr=0.3):
         scores = result[0].pred_track_instances.scores.cpu().numpy()
         labels = result[0].pred_track_instances.instances_id.cpu().numpy()
         
-        # draw_bboxes(frame, bboxes, frame_idx, scores)
+        draw_bboxes(frame, bboxes, frame_idx, scores)
         
 
         detected_objects = []
@@ -120,18 +121,24 @@ def detect_objects(detector, frame, frame_idx, video_len, score_thr=0.3):
         print(e)
         return []
 
-def process_video(video, video_idx, output_folder, detector, logger, mask_buffer, score_thr=0.2, target_width=640):
-    mask_folder = os.path.join(output_folder, 'mask')
-    image_folder = os.path.join(output_folder, 'image')
-    os.makedirs(mask_folder, exist_ok=True)
-    os.makedirs(image_folder, exist_ok=True)
+def process_video(video, video_idx, output_folder, detector, logger, mask_buffer, score_thr=0.2, target_width=640, dataset=None):
+    video_id = f'{dataset.get_video_path(video_idx).split("/")[-2]}'
+
+    json_folder = output_folder
+    # image_folder = os.path.join(output_folder, 'image')
+    os.makedirs(json_folder, exist_ok=True)
+    # os.makedirs(image_folder, exist_ok=True)
+
+    # Dictionary to store unique object IDs
+    object_ids = {}
 
     total_frames = video.shape[0]
     for frame_count in range(video.shape[0]):
-        frame_name = f'frame{frame_count:06d}'
-        mask_path = os.path.join(mask_folder, f'{frame_name}.npz')
-        image_path = os.path.join(image_folder, f'{frame_name}.png')
-        if os.path.exists(mask_path):
+        frame_name = f'{frame_count+1:07d}'
+        json_file_name = f'{video_id}-{frame_name}.json'
+        json_path = os.path.join(json_folder, json_file_name)
+        # image_path = os.path.join(image_folder, f'{frame_name}.png')
+        if os.path.exists(json_path):
             continue
         
         frame = video[frame_count].numpy()
@@ -145,27 +152,31 @@ def process_video(video, video_idx, output_folder, detector, logger, mask_buffer
         detected_objects = detect_objects(detector, resized_frame, frame_count, video.shape[0], score_thr)
 
         # Create mask
-        masks = {}
-        masks['image_size'] = resized_frame.shape
-        for idx, obj in enumerate(detected_objects, start=1):
-            # mask = np.zeros(resized_frame.shape[:2], dtype=np.int32)
+        bboxes_data=[]
+        for obj in detected_objects:
             x1, y1, x2, y2 = obj['bbox']
-            score = obj['score']
             x1, y1 = max(x1, 0), max(y1, 0)
             x2, y2 = min(x2, frame.shape[2]-1), min(y2, frame.shape[1]-1)
-            # mask[y1:y2, x1:x2] = 1
-            masks[obj['class_id']] = (x1, y1, x2, y2, score)
+            object_id = obj['class_id']
+
+            # Append bounding box information in the required format
+            bboxes_data.append({
+                "id": str(object_id),
+                "box2d": {
+                    "x1": float(x1),
+                    "x2": float(x2),
+                    "y1": float(y1),
+                    "y2": float(y2)
+                }
+            })
 
         try:
-            # if not os.path.exists(mask_path):
-            np.savez_compressed(mask_path, masks)
-            cv2.imwrite(image_path, (np.transpose(frame,(1,2,0))*255).astype(np.uint8))
-                # Add mask and video path to buffer (blocks if buffer is full)
-                # frame_idx = str(video_idx).rjust(12, '0') + '_' + str(frame_count).rjust(3, '0')
-                # mask_buffer.put((video_idx, frame_count, masks, mask_path))
+            # Save the bounding box and object ID data as a JSON file
+            with open(json_path, 'w') as json_file:
+                json.dump(bboxes_data, json_file, indent=4)
 
         except Exception as e:
-            logger.error(f'Error saving files for frame {frame_count}: {e}')
+            logger.error(f'Error saving JSON for frame {frame_count}: {e}')
 
         if frame_count % 100 == 0:
             logger.info(f'Processed frame {frame_count}/{total_frames}')
@@ -174,11 +185,11 @@ def worker_gpu(gpu_id, videos, config_file, checkpoint_file, output_dir, score_t
     detector, logger = initialize_detector(config_file, checkpoint_file, gpu_id)
     for video_idx in videos:
         if video_idx < len(dataset):
-            video_folder_name = f'video{dataset.get_video_path(video_idx).split("/")[-2]}'
+            video_folder_name = f'{dataset.get_video_path(video_idx).split("/")[-2]}'
             output_folder = os.path.join(output_dir, video_folder_name)
             os.makedirs(output_folder, exist_ok=True)
             video = dataset.get_video(video_idx)
-            process_video(video, video_idx, output_folder, detector, logger, mask_buffer, score_thr, target_width)
+            process_video(video, video_idx, output_folder, detector, logger, mask_buffer, score_thr, target_width, dataset=dataset)
 
             # Increment processed videos safely using a lock
             # with processed_videos_lock:

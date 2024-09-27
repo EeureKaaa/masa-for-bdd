@@ -26,13 +26,14 @@ class MasaDataset(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a video sample.
         """
+        self.phase=''
         self.args = args
-        self.root_dir = os.path.join(root_dir, phase)
+        self.root_dir = os.path.join(root_dir, self.phase)
         self.mask_buffer = mask_buffer
         self.transform = transform
         self.video_paths = self._get_video_paths()
         self.img_size = args.image_width
-        self.masks_dir = os.path.join(args.output_dir,phase)
+        self.masks_dir = os.path.join(args.output_dir,self.phase)
         self.max_num_objects = args.max_object_num
         # if not transform:
         self.transform = transforms.Compose(
@@ -51,7 +52,7 @@ class MasaDataset(Dataset):
 
     def _get_video_paths(self):
         """
-        Traverse the directory structure to find all videos with the format lt/*/*/rgb.mp4
+        Traverse the directory structure to find all videos with the format bdd_seg/videos/val/*/rgb.mp4
         """
         video_paths = []
         for root in os.listdir(self.root_dir):
